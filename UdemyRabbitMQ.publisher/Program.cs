@@ -16,16 +16,16 @@ namespace UdemyRabbitMQ.publisher
 
             var channel = connection.CreateModel();
 
-            channel.QueueDeclare("hello-queue", true, false, false);
+            channel.ExchangeDeclare("logs-fanout", durable: true, type: ExchangeType.Fanout);
 
             Enumerable.Range(1, 50).ToList().ForEach(x =>
             {
 
-                string message = $"Message {x}";
+                string message = $"log {x}";
 
                 var messageBody = Encoding.UTF8.GetBytes(message);
 
-                channel.BasicPublish(string.Empty, "hello-queue", null, messageBody);
+                channel.BasicPublish("logs-fanout","", null, messageBody);
 
                 Console.WriteLine($"Mesaj gönderilmiştir : {message}");
 
