@@ -38,6 +38,10 @@ namespace UdemyRabbitMQWeb.Watermark.BackgroundServices
         }
         protected override Task ExecuteAsync(CancellationToken stoppingToken)
         {
+
+
+
+           
             var consumer = new AsyncEventingBasicConsumer(_channel);
 
             _channel.BasicConsume(RabbitMQClientService.QueueName, false, consumer);
@@ -56,6 +60,10 @@ namespace UdemyRabbitMQWeb.Watermark.BackgroundServices
         private Task Consumer_Received(object sender, BasicDeliverEventArgs @event)
         {
 
+
+             Task.Delay(10000).Wait();
+
+
             try
             {
                 var productImageCreatedEvent = JsonSerializer.Deserialize<productImageCreatedEvent>(Encoding.UTF8.GetString(@event.Body.ToArray()));
@@ -70,7 +78,7 @@ namespace UdemyRabbitMQWeb.Watermark.BackgroundServices
 
                 using var graphic = Graphics.FromImage(img);
 
-                var font = new Font(FontFamily.GenericMonospace, 32, FontStyle.Bold, GraphicsUnit.Pixel);
+                var font = new Font(FontFamily.GenericMonospace, 40, FontStyle.Bold, GraphicsUnit.Pixel);
 
                 var textSize = graphic.MeasureString(siteName, font);
 
@@ -93,7 +101,7 @@ namespace UdemyRabbitMQWeb.Watermark.BackgroundServices
             catch (Exception ex)
             {
 
-                throw;
+                _logger.LogError(ex.Message);
             }
 
 
