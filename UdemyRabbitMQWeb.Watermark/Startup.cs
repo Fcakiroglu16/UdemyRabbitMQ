@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using UdemyRabbitMQWeb.Watermark.BackgroundServices;
 using UdemyRabbitMQWeb.Watermark.Models;
 using UdemyRabbitMQWeb.Watermark.Services;
 
@@ -37,7 +38,7 @@ namespace UdemyRabbitMQWeb.Watermark
                 options.UseInMemoryDatabase(databaseName: "productDb");
 
             });
-
+            services.AddHostedService<ImageWatermarkProcessBackgroundService>();
             services.AddControllersWithViews();
         }
 
