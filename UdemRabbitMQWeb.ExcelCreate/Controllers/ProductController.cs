@@ -51,7 +51,7 @@ namespace UdemRabbitMQWeb.ExcelCreate.Controllers
             await _context.SaveChangesAsync();
 
 
-            _rabbitMQPublisher.Publish(new Shared.CreateExcelMessage() { FileId = userfile.Id, UserId = user.Id });
+            _rabbitMQPublisher.Publish(new Shared.CreateExcelMessage() { FileId = userfile.Id});
             TempData["StartCreatingExcel"] = true;
 
             return RedirectToAction(nameof(Files));
