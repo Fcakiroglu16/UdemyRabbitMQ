@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using UdemRabbitMQWeb.ExcelCreate.Models;
+using UdemRabbitMQWeb.ExcelCreate.Services;
 
 namespace UdemRabbitMQWeb.ExcelCreate.Controllers
 {
@@ -18,10 +19,12 @@ namespace UdemRabbitMQWeb.ExcelCreate.Controllers
         private readonly AppDbContext _context;
         private readonly UserManager<IdentityUser> _userManager;
 
-        public ProductController(AppDbContext context, UserManager<IdentityUser> userManager)
+        private readonly RabbitMQPublisher _rabbitMQPublisher;
+        public ProductController(AppDbContext context, UserManager<IdentityUser> userManager, RabbitMQPublisher rabbitMQPublisher)
         {
             _context = context;
             _userManager = userManager;
+            _rabbitMQPublisher = rabbitMQPublisher;
         }
 
         public IActionResult Index()
@@ -46,7 +49,9 @@ namespace UdemRabbitMQWeb.ExcelCreate.Controllers
 
 
             await _context.SaveChangesAsync();
-            //rabbitMQ'ya messaj gönder
+
+
+            _rabbitMQPublisher.Publish(new Shared.CreateExcelMessage() { FileId = userfile.Id, UserId = user.Id });
             TempData["StartCreatingExcel"] = true;
 
             return RedirectToAction(nameof(Files));
