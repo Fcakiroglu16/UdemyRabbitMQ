@@ -50,6 +50,7 @@ namespace FileCreateWorkerService
 
             var consumer = new AsyncEventingBasicConsumer(_channel);
 
+            _channel.BasicConsume(RabbitMQClientService.QueueName, false, consumer);
           
             consumer.Received += Consumer_Received;
 
