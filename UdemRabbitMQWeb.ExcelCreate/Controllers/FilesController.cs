@@ -1,11 +1,13 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using UdemRabbitMQWeb.ExcelCreate.Hubs;
 using UdemRabbitMQWeb.ExcelCreate.Models;
 
 namespace UdemRabbitMQWeb.ExcelCreate.Controllers
@@ -17,9 +19,12 @@ namespace UdemRabbitMQWeb.ExcelCreate.Controllers
 
         private readonly AppDbContext _context;
 
-        public FilesController(AppDbContext context)
+        private readonly IHubContext<MyHub> _hubContext;
+
+        public FilesController(AppDbContext context, IHubContext<MyHub> hubContext)
         {
             _context = context;
+            _hubContext = hubContext;
         }
 
         [HttpPost]
@@ -47,6 +52,10 @@ namespace UdemRabbitMQWeb.ExcelCreate.Controllers
 
             await _context.SaveChangesAsync();
             //SignalR notification oluşturulacak
+            await _hubContext.Clients.User(userFile.UserId).SendAsync("CompletedFile");
+            
+            
+            
             return Ok();
         }
     }
