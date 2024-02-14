@@ -1,5 +1,6 @@
 ﻿using RabbitMQ.Client;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 
@@ -28,11 +29,14 @@ namespace UdemyRabbitMQ.publisher
             channel.ExchangeDeclare("logs-direct", durable: true, type: ExchangeType.Direct);
 
 
+
+            var queueProperties = new Dictionary<string, object> { { "x-max-priority", 1 } };
+
             Enum.GetNames(typeof(LogNames)).ToList().ForEach(x =>
             {
                 var routeKey = $"route-{x}";
                 var queueName = $"direct-queue-{x}";
-                channel.QueueDeclare(queueName, true, false, false);
+                channel.QueueDeclare(queueName, true, false, false, queueProperties);
 
                 channel.QueueBind(queueName, "logs-direct",routeKey,null);
 
