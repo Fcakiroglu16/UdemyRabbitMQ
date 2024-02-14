@@ -25,7 +25,7 @@ namespace UdemyRabbitMQ.publisher
             using var connection = factory.CreateConnection();
 
             var channel = connection.CreateModel();
-
+            
             channel.ExchangeDeclare("logs-direct", durable: true, type: ExchangeType.Direct);
 
 
