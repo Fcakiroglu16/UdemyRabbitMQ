@@ -11,13 +11,18 @@ namespace Producer;
 ///     RabbitMQ'ya basit mesaj gönderme işlemleri.
 ///     Publisher Confirms (Acknowledgment) açık ve kapalı senaryoları.
 /// </summary>
-public class RabbitMQSimplePublisher
+public class RabbitMQAckSimplePublisher
 {
     private readonly IChannel _channel;
 
-    public RabbitMQSimplePublisher(IChannel channel)
+    public RabbitMQAckSimplePublisher(IConnection connection)
     {
-        _channel = channel;
+        var channelOpts = new CreateChannelOptions(
+            true,
+            true,
+            new ThrottlingRateLimiter(100)
+        );
+        _channel = connection.CreateChannelAsync(channelOpts).Result;
     }
 
     /// <summary>
@@ -71,8 +76,6 @@ public class RabbitMQSimplePublisher
         Console.WriteLine("  ACK AÇIK - Publisher Confirms Modu");
         Console.WriteLine("═══════════════════════════════════════════════════════════\n");
 
-        // Publisher confirms modunu aktif et
-        await _channel.ConfirmSelectAsync();
 
         var body = Encoding.UTF8.GetBytes(message);
 
@@ -81,6 +84,7 @@ public class RabbitMQSimplePublisher
             Persistent = true,
             MessageId = Guid.NewGuid().ToString()
         };
+        var queueDeclareResult = await _channel.QueueDeclareAsync(queueName, true, false, false);
 
         // Mesajı gönder
         await _channel.BasicPublishAsync(
@@ -96,8 +100,6 @@ public class RabbitMQSimplePublisher
         Console.WriteLine($"   MessageId: {properties.MessageId}");
         Console.WriteLine("   ⏳ RabbitMQ'dan onay bekleniyor...");
 
-        // RabbitMQ'dan onay bekle
-        await _channel.WaitForConfirmsOrDieAsync();
 
         Console.WriteLine("   ✅ RabbitMQ onayı alındı!");
         Console.WriteLine("   🔒 Mesaj başarıyla RabbitMQ'ya ulaştı");
