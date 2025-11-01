@@ -32,15 +32,21 @@ await using var connection = await factory.CreateConnectionAsync();
 await using var channel = await connection.CreateChannelAsync();
 
 
-var streamPublisher = new RabbitMQStreamPublisher(connection);
+var fanoutPublisher = new RabbitMQFanoutPublisher(connection);
+await fanoutPublisher.PublishToFanout("my-fanout-exchange", "Merhaba Fanout Exchange!");
 
-// Stream'e veri gönder
-await streamPublisher.PublishToStream("my-stream", "Merhaba Stream!");
-await streamPublisher.PublishToStream("my-stream", "İkinci mesaj");
-await streamPublisher.PublishToStream("my-stream", "Üçüncü mesaj");
+await fanoutPublisher.ConsumeFromFanout("my-fanout-exchange", "my-fanout-queue");
 
-// Stream'den veri tüket
-await streamPublisher.ConsumeFromStream("my-stream", 3, "first");
+
+//var streamPublisher = new RabbitMQStreamPublisher(connection);
+
+//// Stream'e veri gönder
+//await streamPublisher.PublishToStream("my-stream", "Merhaba Stream!");
+//await streamPublisher.PublishToStream("my-stream", "İkinci mesaj");
+//await streamPublisher.PublishToStream("my-stream", "Üçüncü mesaj");
+
+//// Stream'den veri tüket
+//await streamPublisher.ConsumeFromStream("my-stream", 3, "first");
 
 
 //var publisher = new RabbitMQAckSimplePublisher(connection);
