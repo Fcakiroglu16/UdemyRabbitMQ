@@ -129,6 +129,21 @@ public class RabbitMQStreamPublisher
                 Console.WriteLine($"   Offset: {offset}\n");
 
                 // Stream'de manual ack gerekli
+                // BasicAckAsync(deliveryTag, multiple) parametreleri:
+                // - deliveryTag: Onaylanacak mesajın benzersiz kimliği
+                // - multiple: Toplu onay (batch acknowledgment)
+                //   * false: Sadece bu DeliveryTag'e sahip mesajı onayla
+                //   * true: Bu DeliveryTag'e kadar olan TÜM onaylanmamış mesajları onayla
+                // 
+                // Örnek Senaryo:
+                // DeliveryTag'ler: 1, 2, 3, 4, 5 (5 mesaj alındı)
+                // 
+                // BasicAckAsync(3, false) → Sadece mesaj 3 onaylanır
+                // BasicAckAsync(3, true)  → Mesaj 1, 2, 3 onaylanır (toplu onay)
+                // BasicAckAsync(5, true)  → Tüm mesajlar (1,2,3,4,5) onaylanır
+                //
+                // Performans: multiple=true kullanımı network trafiğini azaltır (batch processing)
+                // Güvenlik: multiple=false daha güvenli (mesaj kayıp riski düşük)
                 await _channel.BasicAckAsync(ea.DeliveryTag, false);
 
                 consumedCount++;
@@ -136,15 +151,62 @@ public class RabbitMQStreamPublisher
             };
 
             // Consumer başlat
+            // BasicConsumeAsync parametreleri:
+            // 
+            // 1. queue: Dinlenecek queue/stream adı
+            // 2. autoAck: Otomatik onay (false = manuel ack gerekli)
+            // 3. consumerTag: Consumer'ın benzersiz kimliği
+            //    - string.Empty: RabbitMQ otomatik tag oluşturur (örn: "amq.ctag-xyz123")
+            //    - "my-consumer-1": Özel tag belirleyebilirsiniz
+            //    - Kullanım amacı: Consumer'ı iptal etmek veya takip etmek için
+            //    
+            //    Örnek Senaryolar:
+            //    • string.Empty → RabbitMQ: "amq.ctag-J8k2LmN9pQ" oluşturur
+            //    • "order-processor-1" → Manuel tag (birden fazla consumer ayırt etmek için)
+            //    • "payment-handler" → Anlamlı isim (loglama ve debugging için)
+            //
+            // 4. noLocal: Aynı bağlantıdan gelen mesajları al/alma (AMQP 0-9-1)
+            //    - false: Kendi gönderdiğin mesajları DA al (varsayılan)
+            //    - true: Kendi gönderdiğin mesajları ALMA
+            //    
+            //    ⚠️ ÖNEMLİ: RabbitMQ'da noLocal parametresi genellikle DESTEKLENMEZ!
+            //    RabbitMQ bu parametreyi yok sayar (ignore eder)
+            //    
+            //    Örnek Senaryo (teorik - çoğu broker'da çalışmaz):
+            //    
+            //    Connection conn = ...;
+            //    Channel ch = conn.CreateChannel();
+            //    
+            //    // Producer: Mesaj gönder
+            //    ch.BasicPublish("", "test-queue", body);
+            //    
+            //    // Consumer 1: noLocal = false
+            //    ch.BasicConsume("test-queue", false, "", false, false, ...) 
+            //    → KENDİ gönderdiği mesajı da ALIR
+            //    
+            //    // Consumer 2: noLocal = true  
+            //    ch.BasicConsume("test-queue", false, "", true, false, ...)
+            //    → KENDİ gönderdiği mesajı ALMAZ (başka connection'dan gelenleri alır)
+            //    
+            //    📌 Best Practice: Her zaman false kullanın (RabbitMQ'da zaten etkisiz)
+            //
+            // 5. exclusive: Queue'yu sadece bu consumer kullanabilir mi?
+            //    - false: Birden fazla consumer aynı queue'yu dinleyebilir (load balancing)
+            //    - true: Sadece bu consumer queue'yu dinler (başka consumer bağlanamaz)
+            //
+            // 6. arguments: Consumer argümanları (örn: x-stream-offset)
+            // 7. consumer: Event handler (AsyncEventingBasicConsumer)
+            // 8. cancellationToken: İptal token'ı
+
             var consumerTag = await _channel.BasicConsumeAsync(
-                streamName,
-                false, // Manual ack
-                string.Empty, // Let RabbitMQ generate the tag
-                true,
-                false,
-                consumerArgs,
-                consumer,
-                CancellationToken.None
+                streamName, // 1. queue
+                false, // 2. autoAck (manuel ack için false)
+                string.Empty, // 3. consumerTag (RabbitMQ otomatik oluşturur)
+                false, // 4. noLocal (RabbitMQ'da yok sayılır, false kullanın)
+                false, // 5. exclusive (false = birden fazla consumer olabilir)
+                consumerArgs, // 6. arguments (stream offset vb.)
+                consumer, // 7. consumer event handler
+                CancellationToken.None // 8. cancellationToken
             );
 
             Console.WriteLine($"🎧 Stream dinleniyor: {streamName}");
