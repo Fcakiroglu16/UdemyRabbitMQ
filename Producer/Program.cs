@@ -32,10 +32,21 @@ await using var connection = await factory.CreateConnectionAsync();
 await using var channel = await connection.CreateChannelAsync();
 
 
-var publisher = new RabbitMQAckSimplePublisher(connection);
-await publisher.SendMessageWithoutAcknowledgment("ack-no-queue", "Hello RabbitMQ with ACK Disabled!");
+var streamPublisher = new RabbitMQStreamPublisher(connection);
 
-await publisher.SendMessageWithAcknowledgment("ack-yes-queue", "Hello RabbitMQ with ACK Enabled!");
+// Stream'e veri gönder
+await streamPublisher.PublishToStream("my-stream", "Merhaba Stream!");
+await streamPublisher.PublishToStream("my-stream", "İkinci mesaj");
+await streamPublisher.PublishToStream("my-stream", "Üçüncü mesaj");
+
+// Stream'den veri tüket
+await streamPublisher.ConsumeFromStream("my-stream", 3, "first");
+
+
+//var publisher = new RabbitMQAckSimplePublisher(connection);
+//await publisher.SendMessageWithoutAcknowledgment("ack-no-queue", "Hello RabbitMQ with ACK Disabled!");
+
+//await publisher.SendMessageWithAcknowledgment("ack-yes-queue", "Hello RabbitMQ with ACK Enabled!");
 
 
 //var scenarios = new RabbitMQQueueScenarios(channel);
