@@ -32,10 +32,17 @@ await using var connection = await factory.CreateConnectionAsync();
 await using var channel = await connection.CreateChannelAsync();
 
 
-var fanoutPublisher = new RabbitMQFanoutPublisher(connection);
-await fanoutPublisher.PublishToFanout("my-fanout-exchange", "Merhaba Fanout Exchange!");
+var quorumPublisher = new RabbitMQQuorumPublisher(connection);
 
-await fanoutPublisher.ConsumeFromFanout("my-fanout-exchange", "my-fanout-queue");
+await quorumPublisher.PublishToQuorum("my-quorum-queue", "Merhaba Quorum Queue!");
+
+await quorumPublisher.ConsumeFromQuorum("my-quorum-queue");
+
+
+//var fanoutPublisher = new RabbitMQFanoutPublisher(connection);
+//await fanoutPublisher.PublishToFanout("my-fanout-exchange", "Merhaba Fanout Exchange!");
+
+//await fanoutPublisher.ConsumeFromFanout("my-fanout-exchange", "my-fanout-queue");
 
 
 //var streamPublisher = new RabbitMQStreamPublisher(connection);
