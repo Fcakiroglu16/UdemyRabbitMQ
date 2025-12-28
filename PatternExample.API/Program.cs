@@ -23,6 +23,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddSingleton<RabbitMQConnectionService>();
 builder.Services.AddScoped<UserEventPublisher>();
 builder.Services.AddHostedService<UserCreatedConsumerService>();
+builder.Services.AddHostedService<InboxMessageProcessorService>();
 builder.Services.AddHostedService<OutboxMessagePublisherService>();
 
 WebApplication app = builder.Build();
@@ -99,6 +100,15 @@ app.MapGet("/outbox-messages", async (AppDbContext dbContext) =>
     return Results.Ok(messages);
 })
 .WithName("GetOutboxMessages");
+
+app.MapGet("/inbox-messages", async (AppDbContext dbContext) =>
+{
+    List<InboxMessage> messages = await dbContext.InboxMessages
+        .OrderByDescending(i => i.CreatedAt)
+        .ToListAsync();
+    return Results.Ok(messages);
+})
+.WithName("GetInboxMessages");
 
 app.Run();
 

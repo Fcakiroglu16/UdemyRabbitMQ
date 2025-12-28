@@ -1,11 +1,11 @@
-using System.Text;
-using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
-using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
+﻿using Microsoft.EntityFrameworkCore;
 using PatternExample.API.Data;
 using PatternExample.API.Models;
 using PatternExample.API.Services;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+using System.Text;
+using System.Text.Json;
 
 namespace PatternExample.API.Consumer;
 
@@ -32,7 +32,7 @@ public class UserCreatedConsumerService : BackgroundService
     {
         await Task.Delay(2000, stoppingToken);
 
-        var connection = await _connectionService.GetConnectionAsync(stoppingToken);
+        IConnection connection = await _connectionService.GetConnectionAsync(stoppingToken);
         _channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
 
         await _channel.ExchangeDeclareAsync(
@@ -60,18 +60,12 @@ public class UserCreatedConsumerService : BackgroundService
         var consumer = new AsyncEventingBasicConsumer(_channel);
         consumer.ReceivedAsync += async (model, ea) =>
         {
-            var messageId = Guid.Empty;
+            Guid messageId = Guid.Empty;
             var idempotencyKey = string.Empty;
 
             try
             {
-                if (string.IsNullOrWhiteSpace(ea.BasicProperties.MessageId) ||
-                    !Guid.TryParse(ea.BasicProperties.MessageId, out messageId))
-                {
-                    _logger.LogWarning("MessageId header eksik veya gecersiz");
-                    await _channel.BasicNackAsync(ea.DeliveryTag, false, false, stoppingToken);
-                    return;
-                }
+
 
                 if (ea.BasicProperties.Headers is null ||
                     !ea.BasicProperties.Headers.TryGetValue("IdempotencyKey", out var idempotencyKeyObj))
@@ -94,7 +88,7 @@ public class UserCreatedConsumerService : BackgroundService
 
                 var body = ea.Body.ToArray();
                 var messageJson = Encoding.UTF8.GetString(body);
-                var message = JsonSerializer.Deserialize<MessageWrapper>(messageJson);
+                MessageWrapper? message = JsonSerializer.Deserialize<MessageWrapper>(messageJson);
 
                 if (message?.Event is null)
                 {
@@ -103,17 +97,18 @@ public class UserCreatedConsumerService : BackgroundService
                     return;
                 }
 
-                var isProcessed = await ProcessMessageWithIdempotencyAsync(
+                var isProcessed = await StoreMessageInInboxAsync(
                     messageId,
                     idempotencyKey,
                     message.Event,
+                    messageJson,
                     stoppingToken);
 
                 if (isProcessed)
                 {
                     await _channel.BasicAckAsync(ea.DeliveryTag, false, stoppingToken);
                     _logger.LogInformation(
-                        "Mesaj basariyla islendi - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
+                        "Mesaj inbox'a kaydedildi - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
                         messageId,
                         idempotencyKey);
                 }
@@ -121,7 +116,7 @@ public class UserCreatedConsumerService : BackgroundService
                 {
                     await _channel.BasicNackAsync(ea.DeliveryTag, false, true, stoppingToken);
                     _logger.LogWarning(
-                        "Mesaj islenemedi, kuyruga geri gonderildi - MessageId: {MessageId}",
+                        "Mesaj inbox'a kaydedilemedi, kuyruga geri gonderildi - MessageId: {MessageId}",
                         messageId);
                 }
             }
@@ -146,118 +141,71 @@ public class UserCreatedConsumerService : BackgroundService
         }
     }
 
-    private async Task<bool> ProcessMessageWithIdempotencyAsync(
+    private async Task<bool> StoreMessageInInboxAsync(
         Guid messageId,
         string idempotencyKey,
         UserCreatedEvent userCreatedEvent,
+        string payload,
         CancellationToken cancellationToken)
     {
-        using var scope = _serviceProvider.CreateScope();
-        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        using IServiceScope scope = _serviceProvider.CreateScope();
+        AppDbContext dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        var existingRecord = await dbContext.IdempotencyRecords
+        IdempotencyRecord? existingIdempotencyRecord = await dbContext.IdempotencyRecords
             .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
 
-        if (existingRecord is not null)
+        if (existingIdempotencyRecord is not null &&
+            existingIdempotencyRecord.Status == IdempotencyStatus.Processed)
         {
-            if (existingRecord.Status == IdempotencyStatus.Processed)
-            {
-                _logger.LogInformation(
-                    "Bu mesaj daha once islendi, atlan?yor - IdempotencyKey: {IdempotencyKey}",
-                    idempotencyKey);
-                return true;
-            }
-
-            if (existingRecord.Status == IdempotencyStatus.Processing)
-            {
-                _logger.LogWarning(
-                    "Bu mesaj su anda isleniyor, kuyruga geri gonderiliyor - IdempotencyKey: {IdempotencyKey}",
-                    idempotencyKey);
-                return false;
-            }
+            _logger.LogInformation(
+                "Bu mesaj daha once islendi, atlanıyor - IdempotencyKey: {IdempotencyKey}",
+                idempotencyKey);
+            return true;
         }
 
-        var isInMemory = dbContext.Database.IsInMemory();
-        var transaction = isInMemory ? null : await dbContext.Database.BeginTransactionAsync(cancellationToken);
-        
+        InboxMessage? existingInboxMessage = await dbContext.InboxMessages
+            .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
+
+        if (existingInboxMessage is not null)
+        {
+            _logger.LogInformation(
+                "Mesaj zaten inbox'ta mevcut - IdempotencyKey: {IdempotencyKey}, Status: {Status}",
+                idempotencyKey,
+                existingInboxMessage.Status);
+            return true;
+        }
+
         try
         {
-            if (existingRecord is null)
+            var inboxMessage = new InboxMessage
             {
-                var idempotencyRecord = new IdempotencyRecord
-                {
-                    IdempotencyKey = idempotencyKey,
-                    MessageId = messageId,
-                    EventType = EventType.UserCreatedEvent,
-                    CreatedAt = DateTime.UtcNow,
-                    Status = IdempotencyStatus.Processing
-                };
-
-                dbContext.IdempotencyRecords.Add(idempotencyRecord);
-                await dbContext.SaveChangesAsync(cancellationToken);
-            }
-            else
-            {
-                existingRecord.Status = IdempotencyStatus.Processing;
-                existingRecord.MessageId = messageId;
-                await dbContext.SaveChangesAsync(cancellationToken);
-            }
-
-            var discount = new Discount
-            {
-                UserId = userCreatedEvent.UserId,
-                DiscountPercentage = 10m,
-                CreatedAt = DateTime.UtcNow
+                MessageId = messageId,
+                IdempotencyKey = idempotencyKey,
+                EventType = EventType.UserCreatedEvent,
+                Payload = payload,
+                CreatedAt = DateTime.UtcNow,
+                Status = InboxMessageStatus.Pending,
+                RetryCount = 0
             };
 
-            dbContext.Discounts.Add(discount);
-
-            var recordToUpdate = await dbContext.IdempotencyRecords
-                .FirstAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
-
-            recordToUpdate.Status = IdempotencyStatus.Processed;
-            recordToUpdate.ProcessedAt = DateTime.UtcNow;
-
+            dbContext.InboxMessages.Add(inboxMessage);
             await dbContext.SaveChangesAsync(cancellationToken);
-            
-            if (transaction is not null)
-            {
-                await transaction.CommitAsync(cancellationToken);
-            }
 
             _logger.LogInformation(
-                "Kullanici icin %10 indirim olusturuldu - UserId: {UserId}, Email: {Email}",
-                userCreatedEvent.UserId,
-                userCreatedEvent.Email);
+                "Mesaj inbox'a kaydedildi - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
+                messageId,
+                idempotencyKey);
 
             return true;
         }
         catch (Exception ex)
         {
-            if (transaction is not null)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-            }
-
-            var failedRecord = await dbContext.IdempotencyRecords
-                .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
-
-            if (failedRecord is not null)
-            {
-                failedRecord.Status = IdempotencyStatus.Failed;
-                await dbContext.SaveChangesAsync(cancellationToken);
-            }
-
             _logger.LogError(
                 ex,
-                "Indirim olusturulurken hata - UserId: {UserId}, IdempotencyKey: {IdempotencyKey}",
-                userCreatedEvent.UserId,
+                "Mesaj inbox'a kaydedilirken hata - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
+                messageId,
                 idempotencyKey);
             return false;
-        }
-        finally
-        {
-            transaction?.Dispose();
         }
     }
 

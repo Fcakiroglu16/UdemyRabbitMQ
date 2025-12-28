@@ -12,6 +12,7 @@ public class AppDbContext : DbContext
     public DbSet<Models.Discount> Discounts { get; set; }
     public DbSet<Models.IdempotencyRecord> IdempotencyRecords { get; set; }
     public DbSet<Models.OutboxMessage> OutboxMessages { get; set; }
+    public DbSet<Models.InboxMessage> InboxMessages { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -33,5 +34,15 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<Models.OutboxMessage>()
             .HasIndex(o => o.MessageId);
+
+        modelBuilder.Entity<Models.InboxMessage>()
+            .HasIndex(i => i.MessageId);
+
+        modelBuilder.Entity<Models.InboxMessage>()
+            .HasIndex(i => i.IdempotencyKey)
+            .IsUnique();
+
+        modelBuilder.Entity<Models.InboxMessage>()
+            .HasIndex(i => new { i.Status, i.CreatedAt });
     }
 }
