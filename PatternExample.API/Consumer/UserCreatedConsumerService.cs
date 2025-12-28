@@ -13,6 +13,9 @@ public class UserCreatedConsumerService : BackgroundService
 {
     private const string ExchangeName = "user-events-exchange";
     private const string QueueName = "discount-queue";
+    private const ushort PrefetchCount = 20;
+    private const int ConsumerCount = 20;
+
     private readonly IServiceProvider _serviceProvider;
     private readonly RabbitMQConnectionService _connectionService;
     private readonly ILogger<UserCreatedConsumerService> _logger;
@@ -35,7 +38,11 @@ public class UserCreatedConsumerService : BackgroundService
         await InitializeChannelAsync(stoppingToken);
         await StartConsumingAsync(stoppingToken);
 
-        _logger.LogInformation("UserCreatedConsumerService ba?lat?ld? - Queue: {QueueName}", QueueName);
+        _logger.LogInformation(
+            "UserCreatedConsumerService ba?lat?ld? - Queue: {QueueName}, PrefetchCount: {PrefetchCount}, ConsumerCount: {ConsumerCount}",
+            QueueName,
+            PrefetchCount,
+            ConsumerCount);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -68,13 +75,16 @@ public class UserCreatedConsumerService : BackgroundService
             routingKey: string.Empty,
             cancellationToken: cancellationToken);
 
-        await _channel.BasicQosAsync(0, 1, false, cancellationToken);
+        await _channel.BasicQosAsync(0, PrefetchCount, false, cancellationToken);
     }
 
     private async Task StartConsumingAsync(CancellationToken stoppingToken)
     {
         var consumer = new AsyncEventingBasicConsumer(_channel);
-        consumer.ReceivedAsync += async (model, ea) => await HandleMessageAsync(ea, stoppingToken);
+        consumer.ReceivedAsync += async (model, ea) =>
+        {
+            await Task.Run(async () => await HandleMessageAsync(ea, stoppingToken), stoppingToken);
+        };
 
         await _channel.BasicConsumeAsync(
             queue: QueueName,
@@ -87,9 +97,15 @@ public class UserCreatedConsumerService : BackgroundService
     {
         var messageId = Guid.Empty;
         var idempotencyKey = string.Empty;
+        var threadId = Environment.CurrentManagedThreadId;
 
         try
         {
+            _logger.LogInformation(
+                "Mesaj i?leniyor - Thread: {ThreadId}, DeliveryTag: {DeliveryTag}",
+                threadId,
+                ea.DeliveryTag);
+
             if (!TryExtractMessageId(ea, out messageId))
             {
                 await RejectMessageAsync(ea.DeliveryTag, requeue: false, stoppingToken);
@@ -113,20 +129,25 @@ public class UserCreatedConsumerService : BackgroundService
                 messageId,
                 idempotencyKey,
                 userCreatedEvent,
+                threadId,
                 stoppingToken);
 
             if (isProcessed)
             {
-                await AcknowledgeMessageAsync(ea.DeliveryTag, messageId, idempotencyKey, stoppingToken);
+                await AcknowledgeMessageAsync(ea.DeliveryTag, messageId, idempotencyKey, threadId, stoppingToken);
             }
             else
             {
-                await RequeueMessageAsync(ea.DeliveryTag, messageId, stoppingToken);
+                await RequeueMessageAsync(ea.DeliveryTag, messageId, threadId, stoppingToken);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Mesaj i?lenirken hata olu?tu - MessageId: {MessageId}", messageId);
+            _logger.LogError(
+                ex,
+                "Mesaj i?lenirken hata olu?tu - Thread: {ThreadId}, MessageId: {MessageId}",
+                threadId,
+                messageId);
             await RejectMessageAsync(ea.DeliveryTag, requeue: true, stoppingToken);
         }
     }
@@ -196,17 +217,18 @@ public class UserCreatedConsumerService : BackgroundService
         Guid messageId,
         string idempotencyKey,
         UserCreatedEvent userCreatedEvent,
+        int threadId,
         CancellationToken cancellationToken)
     {
         using var scope = _serviceProvider.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        if (await IsAlreadyProcessedAsync(dbContext, idempotencyKey, cancellationToken))
+        if (await IsAlreadyProcessedAsync(dbContext, idempotencyKey, threadId, cancellationToken))
         {
             return true;
         }
 
-        if (await IsCurrentlyProcessingAsync(dbContext, idempotencyKey, cancellationToken))
+        if (await IsCurrentlyProcessingAsync(dbContext, idempotencyKey, threadId, cancellationToken))
         {
             return false;
         }
@@ -216,12 +238,14 @@ public class UserCreatedConsumerService : BackgroundService
             messageId,
             idempotencyKey,
             userCreatedEvent,
+            threadId,
             cancellationToken);
     }
 
     private async Task<bool> IsAlreadyProcessedAsync(
         AppDbContext dbContext,
         string idempotencyKey,
+        int threadId,
         CancellationToken cancellationToken)
     {
         var existingRecord = await dbContext.IdempotencyRecords
@@ -230,7 +254,8 @@ public class UserCreatedConsumerService : BackgroundService
         if (existingRecord?.Status == IdempotencyStatus.Processed)
         {
             _logger.LogInformation(
-                "Bu mesaj daha önce i?lendi, atlan?yor - IdempotencyKey: {IdempotencyKey}",
+                "Bu mesaj daha önce i?lendi, atlan?yor - Thread: {ThreadId}, IdempotencyKey: {IdempotencyKey}",
+                threadId,
                 idempotencyKey);
             return true;
         }
@@ -241,6 +266,7 @@ public class UserCreatedConsumerService : BackgroundService
     private async Task<bool> IsCurrentlyProcessingAsync(
         AppDbContext dbContext,
         string idempotencyKey,
+        int threadId,
         CancellationToken cancellationToken)
     {
         var existingRecord = await dbContext.IdempotencyRecords
@@ -249,7 +275,8 @@ public class UserCreatedConsumerService : BackgroundService
         if (existingRecord?.Status == IdempotencyStatus.Processing)
         {
             _logger.LogWarning(
-                "Bu mesaj ?u anda i?leniyor, kuyru?a geri gönderiliyor - IdempotencyKey: {IdempotencyKey}",
+                "Bu mesaj ?u anda i?leniyor, kuyru?a geri gönderiliyor - Thread: {ThreadId}, IdempotencyKey: {IdempotencyKey}",
+                threadId,
                 idempotencyKey);
             return true;
         }
@@ -262,6 +289,7 @@ public class UserCreatedConsumerService : BackgroundService
         Guid messageId,
         string idempotencyKey,
         UserCreatedEvent userCreatedEvent,
+        int threadId,
         CancellationToken cancellationToken)
     {
         var isInMemory = dbContext.Database.IsInMemory();
@@ -284,7 +312,7 @@ public class UserCreatedConsumerService : BackgroundService
                 await transaction.CommitAsync(cancellationToken);
             }
 
-            LogSuccessfulProcessing(userCreatedEvent);
+            LogSuccessfulProcessing(userCreatedEvent, threadId);
             return true;
         }
         catch (Exception ex)
@@ -294,6 +322,7 @@ public class UserCreatedConsumerService : BackgroundService
                 dbContext,
                 idempotencyKey,
                 userCreatedEvent,
+                threadId,
                 ex,
                 cancellationToken);
             return false;
@@ -365,10 +394,11 @@ public class UserCreatedConsumerService : BackgroundService
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    private void LogSuccessfulProcessing(UserCreatedEvent userCreatedEvent)
+    private void LogSuccessfulProcessing(UserCreatedEvent userCreatedEvent, int threadId)
     {
         _logger.LogInformation(
-            "Kullan?c? için %10 indirim olu?turuldu - UserId: {UserId}, Email: {Email}",
+            "Kullan?c? için %10 indirim olu?turuldu - Thread: {ThreadId}, UserId: {UserId}, Email: {Email}",
+            threadId,
             userCreatedEvent.UserId,
             userCreatedEvent.Email);
     }
@@ -378,6 +408,7 @@ public class UserCreatedConsumerService : BackgroundService
         AppDbContext dbContext,
         string idempotencyKey,
         UserCreatedEvent userCreatedEvent,
+        int threadId,
         Exception ex,
         CancellationToken cancellationToken)
     {
@@ -397,7 +428,8 @@ public class UserCreatedConsumerService : BackgroundService
 
         _logger.LogError(
             ex,
-            "?ndirim olu?turulurken hata - UserId: {UserId}, IdempotencyKey: {IdempotencyKey}",
+            "?ndirim olu?turulurken hata - Thread: {ThreadId}, UserId: {UserId}, IdempotencyKey: {IdempotencyKey}",
+            threadId,
             userCreatedEvent.UserId,
             idempotencyKey);
     }
@@ -406,11 +438,13 @@ public class UserCreatedConsumerService : BackgroundService
         ulong deliveryTag,
         Guid messageId,
         string idempotencyKey,
+        int threadId,
         CancellationToken cancellationToken)
     {
         await _channel.BasicAckAsync(deliveryTag, false, cancellationToken);
         _logger.LogInformation(
-            "Mesaj ba?ar?yla i?lendi - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
+            "Mesaj ba?ar?yla i?lendi - Thread: {ThreadId}, MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
+            threadId,
             messageId,
             idempotencyKey);
     }
@@ -418,11 +452,13 @@ public class UserCreatedConsumerService : BackgroundService
     private async Task RequeueMessageAsync(
         ulong deliveryTag,
         Guid messageId,
+        int threadId,
         CancellationToken cancellationToken)
     {
         await _channel.BasicNackAsync(deliveryTag, false, true, cancellationToken);
         _logger.LogWarning(
-            "Mesaj i?lenemedi, kuyru?a geri gönderildi - MessageId: {MessageId}",
+            "Mesaj i?lenemedi, kuyru?a geri gönderildi - Thread: {ThreadId}, MessageId: {MessageId}",
+            threadId,
             messageId);
     }
 
