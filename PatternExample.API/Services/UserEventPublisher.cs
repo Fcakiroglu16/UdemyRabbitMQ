@@ -32,7 +32,7 @@ public class UserEventPublisher
             cancellationToken: cancellationToken);
 
         var messageId = Guid.NewGuid();
-        var idempotencyKey = GenerateIdempotencyKey("UserCreatedEvent", userCreatedEvent.UserId);
+        var idempotencyKey = GenerateIdempotencyKey(EventType.UserCreatedEvent, userCreatedEvent.UserId);
 
         var message = new
         {
@@ -50,7 +50,8 @@ public class UserEventPublisher
             MessageId = messageId.ToString(),
             Headers = new Dictionary<string, object?>
             {
-                { "IdempotencyKey", idempotencyKey }
+                { "IdempotencyKey", idempotencyKey },
+                { "EventType", EventType.UserCreatedEvent.ToString() }
             }
         };
 
@@ -72,7 +73,7 @@ public class UserEventPublisher
         await channel.DisposeAsync();
     }
 
-    private static string GenerateIdempotencyKey(string eventType, Guid userId)
+    private static string GenerateIdempotencyKey(EventType eventType, Guid userId)
     {
         return $"{eventType}-{userId}";
     }

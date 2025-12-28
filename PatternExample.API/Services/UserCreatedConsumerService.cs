@@ -136,7 +136,7 @@ public class UserCreatedConsumerService : BackgroundService
 
         if (existingRecord is not null)
         {
-            if (existingRecord.Status == "Processed")
+            if (existingRecord.Status == IdempotencyStatus.Processed)
             {
                 _logger.LogInformation(
                     "IdempotencyKey {IdempotencyKey} already processed at {ProcessedAt}, skipping",
@@ -145,7 +145,7 @@ public class UserCreatedConsumerService : BackgroundService
                 return true;
             }
 
-            if (existingRecord.Status == "Processing")
+            if (existingRecord.Status == IdempotencyStatus.Processing)
             {
                 _logger.LogWarning(
                     "IdempotencyKey {IdempotencyKey} is currently being processed, requeuing",
@@ -163,9 +163,9 @@ public class UserCreatedConsumerService : BackgroundService
                 {
                     IdempotencyKey = idempotencyKey,
                     MessageId = messageId,
-                    EventType = "UserCreatedEvent",
+                    EventType = Models.EventType.UserCreatedEvent,
                     CreatedAt = DateTime.UtcNow,
-                    Status = "Processing"
+                    Status = IdempotencyStatus.Processing
                 };
 
                 dbContext.IdempotencyRecords.Add(idempotencyRecord);
@@ -173,7 +173,7 @@ public class UserCreatedConsumerService : BackgroundService
             }
             else
             {
-                existingRecord.Status = "Processing";
+                existingRecord.Status = IdempotencyStatus.Processing;
                 existingRecord.MessageId = messageId;
                 await dbContext.SaveChangesAsync(cancellationToken);
             }
@@ -187,19 +187,10 @@ public class UserCreatedConsumerService : BackgroundService
 
             dbContext.Discounts.Add(discount);
 
-            var processedMessage = new ProcessedMessage
-            {
-                MessageId = messageId,
-                IdempotencyKey = idempotencyKey,
-                ProcessedAt = DateTime.UtcNow
-            };
-
-            dbContext.ProcessedMessages.Add(processedMessage);
-
             var recordToUpdate = await dbContext.IdempotencyRecords
                 .FirstAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
 
-            recordToUpdate.Status = "Processed";
+            recordToUpdate.Status = IdempotencyStatus.Processed;
             recordToUpdate.ProcessedAt = DateTime.UtcNow;
 
             await dbContext.SaveChangesAsync(cancellationToken);
@@ -222,7 +213,7 @@ public class UserCreatedConsumerService : BackgroundService
 
             if (failedRecord is not null)
             {
-                failedRecord.Status = "Failed";
+                failedRecord.Status = IdempotencyStatus.Failed;
                 await dbContext.SaveChangesAsync(cancellationToken);
             }
 
