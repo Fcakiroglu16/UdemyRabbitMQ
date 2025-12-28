@@ -35,7 +35,7 @@ public class UserEventPublisher
             cancellationToken: cancellationToken);
 
         var messageId = Guid.NewGuid();
-        var idempotencyKey = $"{EventType.UserCreatedEvent}-{userCreatedEvent.UserId}";
+        var idempotencyKey = Guid.NewGuid().ToString();
 
         var message = new { Event = userCreatedEvent };
         var messageBody = JsonSerializer.Serialize(message);

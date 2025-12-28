@@ -1,9 +1,12 @@
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using PatternExample.API.Consumer;
 using PatternExample.API.Data;
 using PatternExample.API.Models;
 using PatternExample.API.Producer;
 using PatternExample.API.Services;
+
+Console.OutputEncoding = Encoding.UTF8;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
