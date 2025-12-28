@@ -2,43 +2,45 @@ using System.Text;
 using System.Text.Json;
 using RabbitMQ.Client;
 using PatternExample.API.Models;
+using PatternExample.API.Services;
 
-namespace PatternExample.API.Services;
+namespace PatternExample.API.Producer;
 
-public class UserEventPublisher
+public abstract class BaseEventPublisher
 {
-    private const string ExchangeName = "user-events-exchange";
     private readonly RabbitMQConnectionService _connectionService;
-    private readonly ILogger<UserEventPublisher> _logger;
+    private readonly ILogger _logger;
 
-    public UserEventPublisher(
+    protected BaseEventPublisher(
         RabbitMQConnectionService connectionService,
-        ILogger<UserEventPublisher> logger)
+        ILogger logger)
     {
         _connectionService = connectionService;
         _logger = logger;
     }
 
-    public async Task PublishUserCreatedAsync(UserCreatedEvent userCreatedEvent, CancellationToken cancellationToken = default)
+    protected async Task PublishAsync<TEvent>(
+        string exchangeName,
+        TEvent @event,
+        EventType eventType,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default)
     {
         var connection = await _connectionService.GetConnectionAsync(cancellationToken);
         var channel = await connection.CreateChannelAsync(cancellationToken: cancellationToken);
 
         await channel.ExchangeDeclareAsync(
-            exchange: ExchangeName,
+            exchange: exchangeName,
             type: ExchangeType.Fanout,
             durable: true,
             autoDelete: false,
             cancellationToken: cancellationToken);
 
         var messageId = Guid.NewGuid();
-        var idempotencyKey = GenerateIdempotencyKey(EventType.UserCreatedEvent, userCreatedEvent.UserId);
 
         var message = new
         {
-            MessageId = messageId,
-            IdempotencyKey = idempotencyKey,
-            Event = userCreatedEvent
+            Event = @event
         };
 
         var messageBody = JsonSerializer.Serialize(message);
@@ -50,13 +52,13 @@ public class UserEventPublisher
             MessageId = messageId.ToString(),
             Headers = new Dictionary<string, object?>
             {
-                { "IdempotencyKey", idempotencyKey },
-                { "EventType", EventType.UserCreatedEvent.ToString() }
+                { "IdempotencyKey", Encoding.UTF8.GetBytes(idempotencyKey) },
+                { "EventType", Encoding.UTF8.GetBytes(eventType.ToString()) }
             }
         };
 
         await channel.BasicPublishAsync(
-            exchange: ExchangeName,
+            exchange: exchangeName,
             routingKey: string.Empty,
             mandatory: false,
             basicProperties: properties,
@@ -64,8 +66,8 @@ public class UserEventPublisher
             cancellationToken: cancellationToken);
 
         _logger.LogInformation(
-            "UserCreatedEvent published for UserId: {UserId}, MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
-            userCreatedEvent.UserId,
+            "{EventType} published with MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
+            eventType,
             messageId,
             idempotencyKey);
 
@@ -73,8 +75,8 @@ public class UserEventPublisher
         await channel.DisposeAsync();
     }
 
-    private static string GenerateIdempotencyKey(EventType eventType, Guid userId)
+    protected static string GenerateIdempotencyKey(EventType eventType, Guid entityId)
     {
-        return $"{eventType}-{userId}";
+        return $"{eventType}-{entityId}";
     }
 }
