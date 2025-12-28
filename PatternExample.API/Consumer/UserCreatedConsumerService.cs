@@ -68,7 +68,7 @@ public class UserCreatedConsumerService : BackgroundService
                 if (string.IsNullOrWhiteSpace(ea.BasicProperties.MessageId) ||
                     !Guid.TryParse(ea.BasicProperties.MessageId, out messageId))
                 {
-                    _logger.LogWarning("MessageId header eksik veya geçersiz");
+                    _logger.LogWarning("MessageId header eksik veya gecersiz");
                     await _channel.BasicNackAsync(ea.DeliveryTag, false, false, stoppingToken);
                     return;
                 }
@@ -87,7 +87,7 @@ public class UserCreatedConsumerService : BackgroundService
 
                 if (string.IsNullOrWhiteSpace(idempotencyKey))
                 {
-                    _logger.LogWarning("IdempotencyKey bo? - MessageId: {MessageId}", messageId);
+                    _logger.LogWarning("IdempotencyKey bos - MessageId: {MessageId}", messageId);
                     await _channel.BasicNackAsync(ea.DeliveryTag, false, false, stoppingToken);
                     return;
                 }
@@ -113,7 +113,7 @@ public class UserCreatedConsumerService : BackgroundService
                 {
                     await _channel.BasicAckAsync(ea.DeliveryTag, false, stoppingToken);
                     _logger.LogInformation(
-                        "Mesaj ba?ar?yla i?lendi - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
+                        "Mesaj basariyla islendi - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
                         messageId,
                         idempotencyKey);
                 }
@@ -121,13 +121,13 @@ public class UserCreatedConsumerService : BackgroundService
                 {
                     await _channel.BasicNackAsync(ea.DeliveryTag, false, true, stoppingToken);
                     _logger.LogWarning(
-                        "Mesaj i?lenemedi, kuyru?a geri gönderildi - MessageId: {MessageId}",
+                        "Mesaj islenemedi, kuyruga geri gonderildi - MessageId: {MessageId}",
                         messageId);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Mesaj i?lenirken hata olu?tu - MessageId: {MessageId}", messageId);
+                _logger.LogError(ex, "Mesaj islenirken hata olustu - MessageId: {MessageId}", messageId);
                 await _channel.BasicNackAsync(ea.DeliveryTag, false, true, stoppingToken);
             }
         };
@@ -138,7 +138,7 @@ public class UserCreatedConsumerService : BackgroundService
             consumer: consumer,
             cancellationToken: stoppingToken);
 
-        _logger.LogInformation("UserCreatedConsumerService ba?lat?ld? - Queue: {QueueName}", QueueName);
+        _logger.LogInformation("UserCreatedConsumerService baslatildi - Queue: {QueueName}", QueueName);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -163,7 +163,7 @@ public class UserCreatedConsumerService : BackgroundService
             if (existingRecord.Status == IdempotencyStatus.Processed)
             {
                 _logger.LogInformation(
-                    "Bu mesaj daha önce i?lendi, atlan?yor - IdempotencyKey: {IdempotencyKey}",
+                    "Bu mesaj daha once islendi, atlan?yor - IdempotencyKey: {IdempotencyKey}",
                     idempotencyKey);
                 return true;
             }
@@ -171,7 +171,7 @@ public class UserCreatedConsumerService : BackgroundService
             if (existingRecord.Status == IdempotencyStatus.Processing)
             {
                 _logger.LogWarning(
-                    "Bu mesaj ?u anda i?leniyor, kuyru?a geri gönderiliyor - IdempotencyKey: {IdempotencyKey}",
+                    "Bu mesaj su anda isleniyor, kuyruga geri gonderiliyor - IdempotencyKey: {IdempotencyKey}",
                     idempotencyKey);
                 return false;
             }
@@ -226,7 +226,7 @@ public class UserCreatedConsumerService : BackgroundService
             }
 
             _logger.LogInformation(
-                "Kullan?c? için %10 indirim olu?turuldu - UserId: {UserId}, Email: {Email}",
+                "Kullanici icin %10 indirim olusturuldu - UserId: {UserId}, Email: {Email}",
                 userCreatedEvent.UserId,
                 userCreatedEvent.Email);
 
@@ -250,7 +250,7 @@ public class UserCreatedConsumerService : BackgroundService
 
             _logger.LogError(
                 ex,
-                "?ndirim olu?turulurken hata - UserId: {UserId}, IdempotencyKey: {IdempotencyKey}",
+                "Indirim olusturulurken hata - UserId: {UserId}, IdempotencyKey: {IdempotencyKey}",
                 userCreatedEvent.UserId,
                 idempotencyKey);
             return false;

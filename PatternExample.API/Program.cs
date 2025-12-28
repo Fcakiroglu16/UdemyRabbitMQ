@@ -9,6 +9,7 @@ using Scalar.AspNetCore;
 using System.Text;
 
 Console.OutputEncoding = Encoding.UTF8;
+Console.InputEncoding = Encoding.UTF8;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 

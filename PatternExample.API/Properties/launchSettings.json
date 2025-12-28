@@ -8,7 +8,9 @@
       "applicationUrl": "http://localhost:5199",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
-      }
+      },
+      "nativeDebugging": false,
+      "externalConsole": true
     }
   }
 }
