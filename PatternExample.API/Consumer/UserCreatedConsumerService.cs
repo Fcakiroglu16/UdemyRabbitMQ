@@ -65,7 +65,13 @@ public class UserCreatedConsumerService : BackgroundService
 
             try
             {
-
+                if (string.IsNullOrWhiteSpace(ea.BasicProperties.MessageId) ||
+                    !Guid.TryParse(ea.BasicProperties.MessageId, out messageId))
+                {
+                    _logger.LogWarning("MessageId header eksik veya gecersiz");
+                    await _channel.BasicNackAsync(ea.DeliveryTag, false, false, stoppingToken);
+                    return;
+                }
 
                 if (ea.BasicProperties.Headers is null ||
                     !ea.BasicProperties.Headers.TryGetValue("IdempotencyKey", out var idempotencyKeyObj))
@@ -175,8 +181,22 @@ public class UserCreatedConsumerService : BackgroundService
             return true;
         }
 
+        var isInMemory = dbContext.Database.IsInMemory();
+        var transaction = isInMemory ? null : await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
         try
         {
+            var idempotencyRecord = new IdempotencyRecord
+            {
+                IdempotencyKey = idempotencyKey,
+                MessageId = messageId,
+                EventType = EventType.UserCreatedEvent,
+                CreatedAt = DateTime.UtcNow,
+                Status = IdempotencyStatus.Processing
+            };
+
+            dbContext.IdempotencyRecords.Add(idempotencyRecord);
+
             var inboxMessage = new InboxMessage
             {
                 MessageId = messageId,
@@ -191,8 +211,13 @@ public class UserCreatedConsumerService : BackgroundService
             dbContext.InboxMessages.Add(inboxMessage);
             await dbContext.SaveChangesAsync(cancellationToken);
 
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+
             _logger.LogInformation(
-                "Mesaj inbox'a kaydedildi - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
+                "Mesaj inbox ve idempotency tablolarına kaydedildi - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
                 messageId,
                 idempotencyKey);
 
@@ -200,12 +225,21 @@ public class UserCreatedConsumerService : BackgroundService
         }
         catch (Exception ex)
         {
+            if (transaction is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
+
             _logger.LogError(
                 ex,
                 "Mesaj inbox'a kaydedilirken hata - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
                 messageId,
                 idempotencyKey);
             return false;
+        }
+        finally
+        {
+            transaction?.Dispose();
         }
     }
 
