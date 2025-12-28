@@ -51,5 +51,14 @@ app.MapGet("/discounts", async (AppDbContext dbContext) =>
 })
 .WithName("GetDiscounts");
 
+app.MapGet("/idempotency-records", async (AppDbContext dbContext) =>
+{
+    var records = await dbContext.IdempotencyRecords
+        .OrderByDescending(i => i.CreatedAt)
+        .ToListAsync();
+    return Results.Ok(records);
+})
+.WithName("GetIdempotencyRecords");
+
 app.Run();
 

@@ -72,8 +72,16 @@ public class UserCreatedConsumerService : BackgroundService
                     return;
                 }
 
+                if (string.IsNullOrWhiteSpace(message.IdempotencyKey))
+                {
+                    _logger.LogWarning("Message {MessageId} does not contain IdempotencyKey", message.MessageId);
+                    await _channel.BasicNackAsync(ea.DeliveryTag, false, false, stoppingToken);
+                    return;
+                }
+
                 var isProcessed = await ProcessMessageWithIdempotencyAsync(
                     message.MessageId,
+                    message.IdempotencyKey,
                     message.Event,
                     stoppingToken);
 
@@ -81,8 +89,9 @@ public class UserCreatedConsumerService : BackgroundService
                 {
                     await _channel.BasicAckAsync(ea.DeliveryTag, false, stoppingToken);
                     _logger.LogInformation(
-                        "Message {MessageId} processed successfully",
-                        message.MessageId);
+                        "Message {MessageId} with IdempotencyKey {IdempotencyKey} processed successfully",
+                        message.MessageId,
+                        message.IdempotencyKey);
                 }
                 else
                 {
@@ -115,26 +124,60 @@ public class UserCreatedConsumerService : BackgroundService
 
     private async Task<bool> ProcessMessageWithIdempotencyAsync(
         Guid messageId,
+        string idempotencyKey,
         UserCreatedEvent userCreatedEvent,
         CancellationToken cancellationToken)
     {
         using var scope = _serviceProvider.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        var isAlreadyProcessed = await dbContext.ProcessedMessages
-            .AnyAsync(pm => pm.MessageId == messageId, cancellationToken);
+        var existingRecord = await dbContext.IdempotencyRecords
+            .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
 
-        if (isAlreadyProcessed)
+        if (existingRecord is not null)
         {
-            _logger.LogInformation(
-                "Message {MessageId} already processed, skipping",
-                messageId);
-            return true;
+            if (existingRecord.Status == "Processed")
+            {
+                _logger.LogInformation(
+                    "IdempotencyKey {IdempotencyKey} already processed at {ProcessedAt}, skipping",
+                    idempotencyKey,
+                    existingRecord.ProcessedAt);
+                return true;
+            }
+
+            if (existingRecord.Status == "Processing")
+            {
+                _logger.LogWarning(
+                    "IdempotencyKey {IdempotencyKey} is currently being processed, requeuing",
+                    idempotencyKey);
+                return false;
+            }
         }
 
         using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
         try
         {
+            if (existingRecord is null)
+            {
+                var idempotencyRecord = new IdempotencyRecord
+                {
+                    IdempotencyKey = idempotencyKey,
+                    MessageId = messageId,
+                    EventType = "UserCreatedEvent",
+                    CreatedAt = DateTime.UtcNow,
+                    Status = "Processing"
+                };
+
+                dbContext.IdempotencyRecords.Add(idempotencyRecord);
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+            else
+            {
+                existingRecord.Status = "Processing";
+                existingRecord.MessageId = messageId;
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+
             var discount = new Discount
             {
                 UserId = userCreatedEvent.UserId,
@@ -147,28 +190,47 @@ public class UserCreatedConsumerService : BackgroundService
             var processedMessage = new ProcessedMessage
             {
                 MessageId = messageId,
+                IdempotencyKey = idempotencyKey,
                 ProcessedAt = DateTime.UtcNow
             };
 
             dbContext.ProcessedMessages.Add(processedMessage);
 
+            var recordToUpdate = await dbContext.IdempotencyRecords
+                .FirstAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
+
+            recordToUpdate.Status = "Processed";
+            recordToUpdate.ProcessedAt = DateTime.UtcNow;
+
             await dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
             _logger.LogInformation(
-                "Created 10% discount for UserId: {UserId} (Email: {Email})",
+                "Created 10% discount for UserId: {UserId} (Email: {Email}) with IdempotencyKey: {IdempotencyKey}",
                 userCreatedEvent.UserId,
-                userCreatedEvent.Email);
+                userCreatedEvent.Email,
+                idempotencyKey);
 
             return true;
         }
         catch (Exception ex)
         {
             await transaction.RollbackAsync(cancellationToken);
+
+            var failedRecord = await dbContext.IdempotencyRecords
+                .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
+
+            if (failedRecord is not null)
+            {
+                failedRecord.Status = "Failed";
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+
             _logger.LogError(
                 ex,
-                "Failed to create discount for UserId: {UserId}",
-                userCreatedEvent.UserId);
+                "Failed to create discount for UserId: {UserId} with IdempotencyKey: {IdempotencyKey}",
+                userCreatedEvent.UserId,
+                idempotencyKey);
             return false;
         }
     }
@@ -186,5 +248,5 @@ public class UserCreatedConsumerService : BackgroundService
         await base.StopAsync(cancellationToken);
     }
 
-    private record MessageWrapper(Guid MessageId, UserCreatedEvent Event);
+    private record MessageWrapper(Guid MessageId, string IdempotencyKey, UserCreatedEvent Event);
 }
