@@ -177,7 +177,9 @@ public class UserCreatedConsumerService : BackgroundService
             }
         }
 
-        using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var isInMemory = dbContext.Database.IsInMemory();
+        var transaction = isInMemory ? null : await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        
         try
         {
             if (existingRecord is null)
@@ -217,7 +219,11 @@ public class UserCreatedConsumerService : BackgroundService
             recordToUpdate.ProcessedAt = DateTime.UtcNow;
 
             await dbContext.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+            
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
 
             _logger.LogInformation(
                 "Kullan?c? için %10 indirim olu?turuldu - UserId: {UserId}, Email: {Email}",
@@ -228,7 +234,10 @@ public class UserCreatedConsumerService : BackgroundService
         }
         catch (Exception ex)
         {
-            await transaction.RollbackAsync(cancellationToken);
+            if (transaction is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
 
             var failedRecord = await dbContext.IdempotencyRecords
                 .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
@@ -245,6 +254,10 @@ public class UserCreatedConsumerService : BackgroundService
                 userCreatedEvent.UserId,
                 idempotencyKey);
             return false;
+        }
+        finally
+        {
+            transaction?.Dispose();
         }
     }
 

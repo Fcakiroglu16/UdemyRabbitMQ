@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace PatternExample.API.Data;
 
@@ -10,6 +11,12 @@ public class AppDbContext : DbContext
 
     public DbSet<Models.Discount> Discounts { get; set; }
     public DbSet<Models.IdempotencyRecord> IdempotencyRecords { get; set; }
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        optionsBuilder.ConfigureWarnings(warnings =>
+            warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning));
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

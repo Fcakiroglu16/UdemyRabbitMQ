@@ -1,10 +1,12 @@
-using System.Text;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using PatternExample.API.Consumer;
 using PatternExample.API.Data;
 using PatternExample.API.Models;
 using PatternExample.API.Producer;
 using PatternExample.API.Services;
+using RabbitMQ.Client;
+using Scalar.AspNetCore;
+using System.Text;
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -23,24 +25,24 @@ builder.Services.AddHostedService<UserCreatedConsumerService>();
 
 WebApplication app = builder.Build();
 
-// RabbitMQ ba?lant?s?n? test et
-var rabbitMQService = app.Services.GetRequiredService<RabbitMQConnectionService>();
-var logger = app.Services.GetRequiredService<ILogger<Program>>();
+// RabbitMQ bağlantısını test et
+RabbitMQConnectionService rabbitMQService = app.Services.GetRequiredService<RabbitMQConnectionService>();
+ILogger<Program> logger = app.Services.GetRequiredService<ILogger<Program>>();
 
 try
 {
-    logger.LogInformation("RabbitMQ ba?lant?s? test ediliyor...");
-    var connection = await rabbitMQService.GetConnectionAsync();
-    
+    logger.LogInformation("RabbitMQ bağlantısı test ediliyor...");
+    IConnection connection = await rabbitMQService.GetConnectionAsync();
+
     if (connection.IsOpen)
     {
-        logger.LogInformation("? RabbitMQ ba?lant?s? ba?ar?l?! Host: {HostName}, Port: {Port}", 
+        logger.LogInformation("✅ RabbitMQ bağlantısı başarılı! Host: {HostName}, Port: {Port}",
             "localhost", 5672);
     }
 }
 catch (Exception ex)
 {
-    logger.LogError(ex, "? RabbitMQ ba?lant?s? ba?ar?s?z! L�tfen RabbitMQ servisinin �al??t???ndan emin olun.");
+    logger.LogError(ex, "❌ RabbitMQ bağlantısı başarısız! Lütfen RabbitMQ servisinin çalıştığından emin olun.");
 }
 
 
@@ -48,6 +50,7 @@ catch (Exception ex)
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.MapScalarApiReference();
 }
 
 
@@ -79,7 +82,7 @@ app.MapGet("/discounts", async (AppDbContext dbContext) =>
 
 app.MapGet("/idempotency-records", async (AppDbContext dbContext) =>
 {
-    var records = await dbContext.IdempotencyRecords
+    List<IdempotencyRecord> records = await dbContext.IdempotencyRecords
         .OrderByDescending(i => i.CreatedAt)
         .ToListAsync();
     return Results.Ok(records);
