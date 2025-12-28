@@ -6,7 +6,6 @@ public class RabbitMQConnectionService : IAsyncDisposable
 {
     private IConnection? _connection;
     private readonly ILogger<RabbitMQConnectionService> _logger;
-    private readonly SemaphoreSlim _connectionLock = new(1, 1);
 
     public RabbitMQConnectionService(ILogger<RabbitMQConnectionService> logger)
     {
@@ -20,31 +19,18 @@ public class RabbitMQConnectionService : IAsyncDisposable
             return _connection;
         }
 
-        await _connectionLock.WaitAsync(cancellationToken);
-        try
+        var factory = new ConnectionFactory
         {
-            if (_connection is not null && _connection.IsOpen)
-            {
-                return _connection;
-            }
+            HostName = "localhost",
+            Port = 5672,
+            UserName = "guest",
+            Password = "guest"
+        };
 
-            var factory = new ConnectionFactory
-            {
-                HostName = "localhost",
-                Port = 5672,
-                UserName = "guest",
-                Password = "guest"
-            };
+        _connection = await factory.CreateConnectionAsync(cancellationToken);
+        _logger.LogInformation("RabbitMQ ba?lant?s? kuruldu");
 
-            _connection = await factory.CreateConnectionAsync(cancellationToken);
-            _logger.LogInformation("RabbitMQ connection established");
-
-            return _connection;
-        }
-        finally
-        {
-            _connectionLock.Release();
-        }
+        return _connection;
     }
 
     public async ValueTask DisposeAsync()
@@ -53,8 +39,7 @@ public class RabbitMQConnectionService : IAsyncDisposable
         {
             await _connection.CloseAsync();
             await _connection.DisposeAsync();
-            _logger.LogInformation("RabbitMQ connection closed");
+            _logger.LogInformation("RabbitMQ ba?lant?s? kapat?ld?");
         }
-        _connectionLock.Dispose();
     }
 }
