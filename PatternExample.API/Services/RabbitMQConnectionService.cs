@@ -1,4 +1,4 @@
-using RabbitMQ.Client;
+﻿using RabbitMQ.Client;
 
 namespace PatternExample.API.Services;
 
@@ -19,7 +19,7 @@ public class RabbitMQConnectionService : IAsyncDisposable
             return _connection;
         }
 
-        var factory = new ConnectionFactory
+        ConnectionFactory factory = new ConnectionFactory
         {
             HostName = "localhost",
             Port = 5672,
@@ -28,7 +28,7 @@ public class RabbitMQConnectionService : IAsyncDisposable
         };
 
         _connection = await factory.CreateConnectionAsync(cancellationToken);
-        _logger.LogInformation("RabbitMQ ba?lant?s? kuruldu");
+        _logger.LogInformation("RabbitMQ bağlantısı kuruldu");
 
         return _connection;
     }
@@ -39,7 +39,7 @@ public class RabbitMQConnectionService : IAsyncDisposable
         {
             await _connection.CloseAsync();
             await _connection.DisposeAsync();
-            _logger.LogInformation("RabbitMQ ba?lant?s? kapat?ld?");
+            _logger.LogInformation("RabbitMQ bağlantısı kapatıldı");
         }
     }
 }
