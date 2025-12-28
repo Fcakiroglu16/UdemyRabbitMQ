@@ -32,117 +32,163 @@ public class UserCreatedConsumerService : BackgroundService
     {
         await Task.Delay(2000, stoppingToken);
 
-        var connection = await _connectionService.GetConnectionAsync(stoppingToken);
-        _channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
-
-        await _channel.ExchangeDeclareAsync(
-            exchange: ExchangeName,
-            type: ExchangeType.Fanout,
-            durable: true,
-            autoDelete: false,
-            cancellationToken: stoppingToken);
-
-        await _channel.QueueDeclareAsync(
-            queue: QueueName,
-            durable: true,
-            exclusive: false,
-            autoDelete: false,
-            cancellationToken: stoppingToken);
-
-        await _channel.QueueBindAsync(
-            queue: QueueName,
-            exchange: ExchangeName,
-            routingKey: string.Empty,
-            cancellationToken: stoppingToken);
-
-        await _channel.BasicQosAsync(0, 1, false, stoppingToken);
-
-        var consumer = new AsyncEventingBasicConsumer(_channel);
-        consumer.ReceivedAsync += async (model, ea) =>
-        {
-            var messageId = Guid.Empty;
-            var idempotencyKey = string.Empty;
-
-            try
-            {
-                if (string.IsNullOrWhiteSpace(ea.BasicProperties.MessageId) ||
-                    !Guid.TryParse(ea.BasicProperties.MessageId, out messageId))
-                {
-                    _logger.LogWarning("MessageId header eksik veya geçersiz");
-                    await _channel.BasicNackAsync(ea.DeliveryTag, false, false, stoppingToken);
-                    return;
-                }
-
-                if (ea.BasicProperties.Headers is null ||
-                    !ea.BasicProperties.Headers.TryGetValue("IdempotencyKey", out var idempotencyKeyObj))
-                {
-                    _logger.LogWarning("IdempotencyKey header eksik - MessageId: {MessageId}", messageId);
-                    await _channel.BasicNackAsync(ea.DeliveryTag, false, false, stoppingToken);
-                    return;
-                }
-
-                idempotencyKey = idempotencyKeyObj is byte[] bytes
-                    ? Encoding.UTF8.GetString(bytes)
-                    : idempotencyKeyObj?.ToString() ?? string.Empty;
-
-                if (string.IsNullOrWhiteSpace(idempotencyKey))
-                {
-                    _logger.LogWarning("IdempotencyKey bo? - MessageId: {MessageId}", messageId);
-                    await _channel.BasicNackAsync(ea.DeliveryTag, false, false, stoppingToken);
-                    return;
-                }
-
-                var body = ea.Body.ToArray();
-                var messageJson = Encoding.UTF8.GetString(body);
-                var message = JsonSerializer.Deserialize<MessageWrapper>(messageJson);
-
-                if (message?.Event is null)
-                {
-                    _logger.LogWarning("Event deserialize edilemedi - MessageId: {MessageId}", messageId);
-                    await _channel.BasicNackAsync(ea.DeliveryTag, false, false, stoppingToken);
-                    return;
-                }
-
-                var isProcessed = await ProcessMessageWithIdempotencyAsync(
-                    messageId,
-                    idempotencyKey,
-                    message.Event,
-                    stoppingToken);
-
-                if (isProcessed)
-                {
-                    await _channel.BasicAckAsync(ea.DeliveryTag, false, stoppingToken);
-                    _logger.LogInformation(
-                        "Mesaj ba?ar?yla i?lendi - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
-                        messageId,
-                        idempotencyKey);
-                }
-                else
-                {
-                    await _channel.BasicNackAsync(ea.DeliveryTag, false, true, stoppingToken);
-                    _logger.LogWarning(
-                        "Mesaj i?lenemedi, kuyru?a geri gönderildi - MessageId: {MessageId}",
-                        messageId);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Mesaj i?lenirken hata olu?tu - MessageId: {MessageId}", messageId);
-                await _channel.BasicNackAsync(ea.DeliveryTag, false, true, stoppingToken);
-            }
-        };
-
-        await _channel.BasicConsumeAsync(
-            queue: QueueName,
-            autoAck: false,
-            consumer: consumer,
-            cancellationToken: stoppingToken);
+        await InitializeChannelAsync(stoppingToken);
+        await StartConsumingAsync(stoppingToken);
 
         _logger.LogInformation("UserCreatedConsumerService ba?lat?ld? - Queue: {QueueName}", QueueName);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             await Task.Delay(1000, stoppingToken);
+        }
+    }
+
+    private async Task InitializeChannelAsync(CancellationToken cancellationToken)
+    {
+        var connection = await _connectionService.GetConnectionAsync(cancellationToken);
+        _channel = await connection.CreateChannelAsync(cancellationToken: cancellationToken);
+
+        await _channel.ExchangeDeclareAsync(
+            exchange: ExchangeName,
+            type: ExchangeType.Fanout,
+            durable: true,
+            autoDelete: false,
+            cancellationToken: cancellationToken);
+
+        await _channel.QueueDeclareAsync(
+            queue: QueueName,
+            durable: true,
+            exclusive: false,
+            autoDelete: false,
+            cancellationToken: cancellationToken);
+
+        await _channel.QueueBindAsync(
+            queue: QueueName,
+            exchange: ExchangeName,
+            routingKey: string.Empty,
+            cancellationToken: cancellationToken);
+
+        await _channel.BasicQosAsync(0, 1, false, cancellationToken);
+    }
+
+    private async Task StartConsumingAsync(CancellationToken stoppingToken)
+    {
+        var consumer = new AsyncEventingBasicConsumer(_channel);
+        consumer.ReceivedAsync += async (model, ea) => await HandleMessageAsync(ea, stoppingToken);
+
+        await _channel.BasicConsumeAsync(
+            queue: QueueName,
+            autoAck: false,
+            consumer: consumer,
+            cancellationToken: stoppingToken);
+    }
+
+    private async Task HandleMessageAsync(BasicDeliverEventArgs ea, CancellationToken stoppingToken)
+    {
+        var messageId = Guid.Empty;
+        var idempotencyKey = string.Empty;
+
+        try
+        {
+            if (!TryExtractMessageId(ea, out messageId))
+            {
+                await RejectMessageAsync(ea.DeliveryTag, requeue: false, stoppingToken);
+                return;
+            }
+
+            if (!TryExtractIdempotencyKey(ea, messageId, out idempotencyKey))
+            {
+                await RejectMessageAsync(ea.DeliveryTag, requeue: false, stoppingToken);
+                return;
+            }
+
+            var userCreatedEvent = DeserializeMessage(ea, messageId);
+            if (userCreatedEvent is null)
+            {
+                await RejectMessageAsync(ea.DeliveryTag, requeue: false, stoppingToken);
+                return;
+            }
+
+            var isProcessed = await ProcessMessageWithIdempotencyAsync(
+                messageId,
+                idempotencyKey,
+                userCreatedEvent,
+                stoppingToken);
+
+            if (isProcessed)
+            {
+                await AcknowledgeMessageAsync(ea.DeliveryTag, messageId, idempotencyKey, stoppingToken);
+            }
+            else
+            {
+                await RequeueMessageAsync(ea.DeliveryTag, messageId, stoppingToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Mesaj i?lenirken hata olu?tu - MessageId: {MessageId}", messageId);
+            await RejectMessageAsync(ea.DeliveryTag, requeue: true, stoppingToken);
+        }
+    }
+
+    private bool TryExtractMessageId(BasicDeliverEventArgs ea, out Guid messageId)
+    {
+        messageId = Guid.Empty;
+
+        if (string.IsNullOrWhiteSpace(ea.BasicProperties.MessageId) ||
+            !Guid.TryParse(ea.BasicProperties.MessageId, out messageId))
+        {
+            _logger.LogWarning("MessageId header eksik veya geçersiz");
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryExtractIdempotencyKey(BasicDeliverEventArgs ea, Guid messageId, out string idempotencyKey)
+    {
+        idempotencyKey = string.Empty;
+
+        if (ea.BasicProperties.Headers is null ||
+            !ea.BasicProperties.Headers.TryGetValue("IdempotencyKey", out var idempotencyKeyObj))
+        {
+            _logger.LogWarning("IdempotencyKey header eksik - MessageId: {MessageId}", messageId);
+            return false;
+        }
+
+        idempotencyKey = idempotencyKeyObj is byte[] bytes
+            ? Encoding.UTF8.GetString(bytes)
+            : idempotencyKeyObj?.ToString() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            _logger.LogWarning("IdempotencyKey bo? - MessageId: {MessageId}", messageId);
+            return false;
+        }
+
+        return true;
+    }
+
+    private UserCreatedEvent? DeserializeMessage(BasicDeliverEventArgs ea, Guid messageId)
+    {
+        try
+        {
+            var body = ea.Body.ToArray();
+            var messageJson = Encoding.UTF8.GetString(body);
+            var message = JsonSerializer.Deserialize<MessageWrapper>(messageJson);
+
+            if (message?.Event is null)
+            {
+                _logger.LogWarning("Event deserialize edilemedi - MessageId: {MessageId}", messageId);
+                return null;
+            }
+
+            return message.Event;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Mesaj deserialize edilirken hata - MessageId: {MessageId}", messageId);
+            return null;
         }
     }
 
@@ -155,110 +201,237 @@ public class UserCreatedConsumerService : BackgroundService
         using var scope = _serviceProvider.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+        if (await IsAlreadyProcessedAsync(dbContext, idempotencyKey, cancellationToken))
+        {
+            return true;
+        }
+
+        if (await IsCurrentlyProcessingAsync(dbContext, idempotencyKey, cancellationToken))
+        {
+            return false;
+        }
+
+        return await ProcessMessageInTransactionAsync(
+            dbContext,
+            messageId,
+            idempotencyKey,
+            userCreatedEvent,
+            cancellationToken);
+    }
+
+    private async Task<bool> IsAlreadyProcessedAsync(
+        AppDbContext dbContext,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
         var existingRecord = await dbContext.IdempotencyRecords
             .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
 
-        if (existingRecord is not null)
+        if (existingRecord?.Status == IdempotencyStatus.Processed)
         {
-            if (existingRecord.Status == IdempotencyStatus.Processed)
-            {
-                _logger.LogInformation(
-                    "Bu mesaj daha önce i?lendi, atlan?yor - IdempotencyKey: {IdempotencyKey}",
-                    idempotencyKey);
-                return true;
-            }
-
-            if (existingRecord.Status == IdempotencyStatus.Processing)
-            {
-                _logger.LogWarning(
-                    "Bu mesaj ?u anda i?leniyor, kuyru?a geri gönderiliyor - IdempotencyKey: {IdempotencyKey}",
-                    idempotencyKey);
-                return false;
-            }
+            _logger.LogInformation(
+                "Bu mesaj daha önce i?lendi, atlan?yor - IdempotencyKey: {IdempotencyKey}",
+                idempotencyKey);
+            return true;
         }
 
+        return false;
+    }
+
+    private async Task<bool> IsCurrentlyProcessingAsync(
+        AppDbContext dbContext,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        var existingRecord = await dbContext.IdempotencyRecords
+            .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
+
+        if (existingRecord?.Status == IdempotencyStatus.Processing)
+        {
+            _logger.LogWarning(
+                "Bu mesaj ?u anda i?leniyor, kuyru?a geri gönderiliyor - IdempotencyKey: {IdempotencyKey}",
+                idempotencyKey);
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> ProcessMessageInTransactionAsync(
+        AppDbContext dbContext,
+        Guid messageId,
+        string idempotencyKey,
+        UserCreatedEvent userCreatedEvent,
+        CancellationToken cancellationToken)
+    {
         var isInMemory = dbContext.Database.IsInMemory();
         var transaction = isInMemory ? null : await dbContext.Database.BeginTransactionAsync(cancellationToken);
-        
+
         try
         {
-            if (existingRecord is null)
-            {
-                var idempotencyRecord = new IdempotencyRecord
-                {
-                    IdempotencyKey = idempotencyKey,
-                    MessageId = messageId,
-                    EventType = EventType.UserCreatedEvent,
-                    CreatedAt = DateTime.UtcNow,
-                    Status = IdempotencyStatus.Processing
-                };
+            await CreateOrUpdateIdempotencyRecordAsync(
+                dbContext,
+                messageId,
+                idempotencyKey,
+                cancellationToken);
 
-                dbContext.IdempotencyRecords.Add(idempotencyRecord);
-                await dbContext.SaveChangesAsync(cancellationToken);
-            }
-            else
-            {
-                existingRecord.Status = IdempotencyStatus.Processing;
-                existingRecord.MessageId = messageId;
-                await dbContext.SaveChangesAsync(cancellationToken);
-            }
+            await CreateDiscountAsync(dbContext, userCreatedEvent, cancellationToken);
 
-            var discount = new Discount
-            {
-                UserId = userCreatedEvent.UserId,
-                DiscountPercentage = 10m,
-                CreatedAt = DateTime.UtcNow
-            };
+            await MarkAsProcessedAsync(dbContext, idempotencyKey, cancellationToken);
 
-            dbContext.Discounts.Add(discount);
-
-            var recordToUpdate = await dbContext.IdempotencyRecords
-                .FirstAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
-
-            recordToUpdate.Status = IdempotencyStatus.Processed;
-            recordToUpdate.ProcessedAt = DateTime.UtcNow;
-
-            await dbContext.SaveChangesAsync(cancellationToken);
-            
             if (transaction is not null)
             {
                 await transaction.CommitAsync(cancellationToken);
             }
 
-            _logger.LogInformation(
-                "Kullan?c? için %10 indirim olu?turuldu - UserId: {UserId}, Email: {Email}",
-                userCreatedEvent.UserId,
-                userCreatedEvent.Email);
-
+            LogSuccessfulProcessing(userCreatedEvent);
             return true;
         }
         catch (Exception ex)
         {
-            if (transaction is not null)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-            }
-
-            var failedRecord = await dbContext.IdempotencyRecords
-                .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
-
-            if (failedRecord is not null)
-            {
-                failedRecord.Status = IdempotencyStatus.Failed;
-                await dbContext.SaveChangesAsync(cancellationToken);
-            }
-
-            _logger.LogError(
+            await HandleProcessingErrorAsync(
+                transaction,
+                dbContext,
+                idempotencyKey,
+                userCreatedEvent,
                 ex,
-                "?ndirim olu?turulurken hata - UserId: {UserId}, IdempotencyKey: {IdempotencyKey}",
-                userCreatedEvent.UserId,
-                idempotencyKey);
+                cancellationToken);
             return false;
         }
         finally
         {
             transaction?.Dispose();
         }
+    }
+
+    private async Task CreateOrUpdateIdempotencyRecordAsync(
+        AppDbContext dbContext,
+        Guid messageId,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        var existingRecord = await dbContext.IdempotencyRecords
+            .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
+
+        if (existingRecord is null)
+        {
+            var idempotencyRecord = new IdempotencyRecord
+            {
+                IdempotencyKey = idempotencyKey,
+                MessageId = messageId,
+                EventType = EventType.UserCreatedEvent,
+                CreatedAt = DateTime.UtcNow,
+                Status = IdempotencyStatus.Processing
+            };
+
+            dbContext.IdempotencyRecords.Add(idempotencyRecord);
+        }
+        else
+        {
+            existingRecord.Status = IdempotencyStatus.Processing;
+            existingRecord.MessageId = messageId;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task CreateDiscountAsync(
+        AppDbContext dbContext,
+        UserCreatedEvent userCreatedEvent,
+        CancellationToken cancellationToken)
+    {
+        var discount = new Discount
+        {
+            UserId = userCreatedEvent.UserId,
+            DiscountPercentage = 10m,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        dbContext.Discounts.Add(discount);
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task MarkAsProcessedAsync(
+        AppDbContext dbContext,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        var recordToUpdate = await dbContext.IdempotencyRecords
+            .FirstAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
+
+        recordToUpdate.Status = IdempotencyStatus.Processed;
+        recordToUpdate.ProcessedAt = DateTime.UtcNow;
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private void LogSuccessfulProcessing(UserCreatedEvent userCreatedEvent)
+    {
+        _logger.LogInformation(
+            "Kullan?c? için %10 indirim olu?turuldu - UserId: {UserId}, Email: {Email}",
+            userCreatedEvent.UserId,
+            userCreatedEvent.Email);
+    }
+
+    private async Task HandleProcessingErrorAsync(
+        Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? transaction,
+        AppDbContext dbContext,
+        string idempotencyKey,
+        UserCreatedEvent userCreatedEvent,
+        Exception ex,
+        CancellationToken cancellationToken)
+    {
+        if (transaction is not null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+        }
+
+        var failedRecord = await dbContext.IdempotencyRecords
+            .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey, cancellationToken);
+
+        if (failedRecord is not null)
+        {
+            failedRecord.Status = IdempotencyStatus.Failed;
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        _logger.LogError(
+            ex,
+            "?ndirim olu?turulurken hata - UserId: {UserId}, IdempotencyKey: {IdempotencyKey}",
+            userCreatedEvent.UserId,
+            idempotencyKey);
+    }
+
+    private async Task AcknowledgeMessageAsync(
+        ulong deliveryTag,
+        Guid messageId,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        await _channel.BasicAckAsync(deliveryTag, false, cancellationToken);
+        _logger.LogInformation(
+            "Mesaj ba?ar?yla i?lendi - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
+            messageId,
+            idempotencyKey);
+    }
+
+    private async Task RequeueMessageAsync(
+        ulong deliveryTag,
+        Guid messageId,
+        CancellationToken cancellationToken)
+    {
+        await _channel.BasicNackAsync(deliveryTag, false, true, cancellationToken);
+        _logger.LogWarning(
+            "Mesaj i?lenemedi, kuyru?a geri gönderildi - MessageId: {MessageId}",
+            messageId);
+    }
+
+    private async Task RejectMessageAsync(
+        ulong deliveryTag,
+        bool requeue,
+        CancellationToken cancellationToken)
+    {
+        await _channel.BasicNackAsync(deliveryTag, false, requeue, cancellationToken);
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
