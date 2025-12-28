@@ -11,6 +11,7 @@ public class AppDbContext : DbContext
 
     public DbSet<Models.Discount> Discounts { get; set; }
     public DbSet<Models.IdempotencyRecord> IdempotencyRecords { get; set; }
+    public DbSet<Models.OutboxMessage> OutboxMessages { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -26,5 +27,11 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<Models.IdempotencyRecord>()
             .HasIndex(i => i.MessageId);
+
+        modelBuilder.Entity<Models.OutboxMessage>()
+            .HasIndex(o => new { o.IsProcessed, o.CreatedAt });
+
+        modelBuilder.Entity<Models.OutboxMessage>()
+            .HasIndex(o => o.MessageId);
     }
 }

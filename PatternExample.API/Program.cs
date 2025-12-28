@@ -20,8 +20,9 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseInMemoryDatabase("DiscountDb"));
 
 builder.Services.AddSingleton<RabbitMQConnectionService>();
-builder.Services.AddSingleton<UserEventPublisher>();
+builder.Services.AddScoped<UserEventPublisher>();
 builder.Services.AddHostedService<UserCreatedConsumerService>();
+builder.Services.AddHostedService<OutboxMessagePublisherService>();
 
 WebApplication app = builder.Build();
 
@@ -88,6 +89,15 @@ app.MapGet("/idempotency-records", async (AppDbContext dbContext) =>
     return Results.Ok(records);
 })
 .WithName("GetIdempotencyRecords");
+
+app.MapGet("/outbox-messages", async (AppDbContext dbContext) =>
+{
+    List<OutboxMessage> messages = await dbContext.OutboxMessages
+        .OrderByDescending(o => o.CreatedAt)
+        .ToListAsync();
+    return Results.Ok(messages);
+})
+.WithName("GetOutboxMessages");
 
 app.Run();
 

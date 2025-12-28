@@ -1,22 +1,19 @@
-using System.Text;
 using System.Text.Json;
-using RabbitMQ.Client;
+using PatternExample.API.Data;
 using PatternExample.API.Models;
-using PatternExample.API.Services;
 
 namespace PatternExample.API.Producer;
 
 public class UserEventPublisher
 {
-    private const string ExchangeName = "user-events-exchange";
-    private readonly RabbitMQConnectionService _connectionService;
+    private readonly AppDbContext _dbContext;
     private readonly ILogger<UserEventPublisher> _logger;
 
     public UserEventPublisher(
-        RabbitMQConnectionService connectionService,
+        AppDbContext dbContext,
         ILogger<UserEventPublisher> logger)
     {
-        _connectionService = connectionService;
+        _dbContext = dbContext;
         _logger = logger;
     }
 
@@ -24,48 +21,30 @@ public class UserEventPublisher
         UserCreatedEvent userCreatedEvent,
         CancellationToken cancellationToken = default)
     {
-        var connection = await _connectionService.GetConnectionAsync(cancellationToken);
-        var channel = await connection.CreateChannelAsync(cancellationToken: cancellationToken);
-
-        await channel.ExchangeDeclareAsync(
-            exchange: ExchangeName,
-            type: ExchangeType.Fanout,
-            durable: true,
-            autoDelete: false,
-            cancellationToken: cancellationToken);
-
-        var messageId = Guid.NewGuid();
+        var messageId = Guid.NewGuid().ToString();
         var idempotencyKey = Guid.NewGuid().ToString();
 
         var message = new { Event = userCreatedEvent };
-        var messageBody = JsonSerializer.Serialize(message);
-        var body = Encoding.UTF8.GetBytes(messageBody);
+        var payload = JsonSerializer.Serialize(message);
 
-        var properties = new BasicProperties
+        var outboxMessage = new OutboxMessage
         {
-            Persistent = true,
-            MessageId = messageId.ToString(),
-            Headers = new Dictionary<string, object?>
-            {
-                { "IdempotencyKey", Encoding.UTF8.GetBytes(idempotencyKey) },
-                { "EventType", Encoding.UTF8.GetBytes(EventType.UserCreatedEvent.ToString()) }
-            }
+            MessageId = messageId,
+            IdempotencyKey = idempotencyKey,
+            EventType = EventType.UserCreatedEvent.ToString(),
+            Payload = payload,
+            CreatedAt = DateTime.UtcNow,
+            IsProcessed = false,
+            RetryCount = 0
         };
 
-        await channel.BasicPublishAsync(
-            exchange: ExchangeName,
-            routingKey: string.Empty,
-            mandatory: false,
-            basicProperties: properties,
-            body: body,
-            cancellationToken: cancellationToken);
+        await _dbContext.OutboxMessages.AddAsync(outboxMessage, cancellationToken);
+        await _dbContext.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation(
-            "UserCreatedEvent published - MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
+            "UserCreatedEvent saved to outbox - OutboxMessageId: {OutboxMessageId}, MessageId: {MessageId}, IdempotencyKey: {IdempotencyKey}",
+            outboxMessage.Id,
             messageId,
             idempotencyKey);
-
-        await channel.CloseAsync(cancellationToken);
-        await channel.DisposeAsync();
     }
 }
