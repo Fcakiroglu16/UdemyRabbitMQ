@@ -1,13 +1,15 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.14.36616.10
+# Visual Studio Version 18
+VisualStudioVersion = 18.1.11312.151 d18.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Producer", "Producer\Producer.csproj", "{AA884E08-BD7D-4A6A-BF2D-5D951DD69332}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Consumer", "Consumer\Consumer.csproj", "{84760528-8E17-4244-AE3A-6890F6B12191}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharedBus", "SharedBus\SharedBus.csproj", "{55449BDF-EC50-44E0-96CA-4589D56A535F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PatternExample.API", "PatternExample.API\PatternExample.API.csproj", "{4B90CD4A-F077-4681-AA93-4D3C08579172}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -27,6 +29,10 @@ Global
 		{55449BDF-EC50-44E0-96CA-4589D56A535F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{55449BDF-EC50-44E0-96CA-4589D56A535F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{55449BDF-EC50-44E0-96CA-4589D56A535F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4B90CD4A-F077-4681-AA93-4D3C08579172}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4B90CD4A-F077-4681-AA93-4D3C08579172}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4B90CD4A-F077-4681-AA93-4D3C08579172}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4B90CD4A-F077-4681-AA93-4D3C08579172}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
