@@ -1,6 +1,7 @@
 ﻿#region
 
 using Producer;
+using Producer.Stream;
 using RabbitMQ.Client;
 
 #endregion
@@ -32,11 +33,36 @@ await using var connection = await factory.CreateConnectionAsync();
 await using var channel = await connection.CreateChannelAsync();
 
 
-var quorumPublisher = new RabbitMQQuorumPublisher(connection);
+// ═══════════════════════════════════════════════════════════════════════
+// STREAM PUBLISH SENARYOLARI - ACK KAPALI ve ACK AÇIK
+// Consumer projesi ile aynı stream adı kullanılır: "stream-ack-demo"
+// ═══════════════════════════════════════════════════════════════════════
+const string streamName = "stream-ack-demo";
 
-await quorumPublisher.PublishToQuorum("my-quorum-queue", "Merhaba Quorum Queue!");
+var streamAckPublisher = new StreamAckPublisher(connection);
 
-await quorumPublisher.ConsumeFromQuorum("my-quorum-queue");
+// 1) ACK KAPALI - Fire and Forget (broker onayı beklenmez)
+await streamAckPublisher.PublishWithoutAckAsync(streamName, new[]
+{
+    "ACK Kapalı - Mesaj 1",
+    "ACK Kapalı - Mesaj 2",
+    "ACK Kapalı - Mesaj 3"
+});
+
+// 2) ACK AÇIK - Publisher Confirms (broker onayı beklenir)
+await streamAckPublisher.PublishWithAckAsync(streamName, new[]
+{
+    "ACK Açık - Mesaj 1",
+    "ACK Açık - Mesaj 2",
+    "ACK Açık - Mesaj 3"
+});
+
+
+//var quorumPublisher = new RabbitMQQuorumPublisher(connection);
+
+//await quorumPublisher.PublishToQuorum("my-quorum-queue", "Merhaba Quorum Queue!");
+
+//await quorumPublisher.ConsumeFromQuorum("my-quorum-queue");
 
 
 //var fanoutPublisher = new RabbitMQFanoutPublisher(connection);

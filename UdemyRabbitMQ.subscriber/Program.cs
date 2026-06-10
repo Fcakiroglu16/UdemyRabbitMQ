@@ -56,9 +56,8 @@ namespace UdemyRabbitMQ.subscriber
                 channel.BasicAck(e.DeliveryTag, false);
             };
 
+            channel.BasicConsume(randomQueueName, false, consumer);
 
-
-           
 
             Console.ReadLine();
         }
